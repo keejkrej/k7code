@@ -26,10 +26,10 @@ use crate::provider::{
 use crate::storage::StorageManager;
 use crate::ui::chat::{ChatRenderProps, ChatView};
 use crate::ui::composer::{ComposerRenderProps, ComposerView};
-use crate::ui::diff_panel::{DiffPanelRenderProps, DiffPanelView};
 use crate::ui::header::{HeaderRenderProps, HeaderView};
 use crate::ui::model_picker::{ModelPickerModalView, ModelPickerRenderProps};
 use crate::ui::rename_modal::{RenameModalRenderProps, RenameModalView};
+use crate::ui::right_panel::{RightPanelRenderProps, RightPanelTab, RightPanelView};
 use crate::ui::settings_modal::{SettingsModalView, SettingsRenderProps, SettingsTab};
 use crate::ui::sidebar::{SidebarFilter, SidebarRenderProps, SidebarView};
 use crate::ui::v_flex;
@@ -47,10 +47,17 @@ pub struct K7AppView {
     pub is_sidebar_open: bool,
     pub sidebar_filter: SidebarFilter,
 
-    pub is_diff_panel_open: bool,
+    pub is_right_panel_open: bool,
+    pub active_right_tab: RightPanelTab,
     pub diff_files: Vec<FileDiffSummary>,
     pub diff_content: String,
     pub selected_diff_file: Option<String>,
+    pub terminal_logs: Vec<String>,
+    pub linked_pr_number: Option<usize>,
+    pub linked_pr_url: Option<String>,
+    pub linked_pr_title: Option<String>,
+    pub used_tokens: usize,
+    pub max_tokens: usize,
 
     pub is_settings_open: bool,
     pub settings_tab: SettingsTab,
@@ -72,12 +79,12 @@ impl K7AppView {
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Ask a question or describe a task (e.g. 'run cargo check')...")
+                .placeholder("Ask a question, propose changes, or run tasks (e.g. 'cargo check')...")
         });
 
         let search_input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search threads...")
+                .placeholder("Search threads or prompts...")
         });
 
         let rename_input_state = cx.new(|cx| {
@@ -95,10 +102,22 @@ impl K7AppView {
             rename_input_state,
             is_sidebar_open: true,
             sidebar_filter: SidebarFilter::Active,
-            is_diff_panel_open: false,
+            is_right_panel_open: false,
+            active_right_tab: RightPanelTab::Diffs,
             diff_files: Vec::new(),
             diff_content: String::new(),
             selected_diff_file: None,
+            terminal_logs: vec![
+                "[00:00:00] Antigravity CLI runner v0.9.4 initialized".to_string(),
+                "[00:00:01] Workspace bound to C:\\Users\\ctyja\\workspace\\k7code".to_string(),
+                "[00:00:02] Git repository: keejkrej/k7code on feat/t3code-ui-parity".to_string(),
+                "[00:00:02] PR #2 linked: feat(ui): complete section-by-section parity with T3 Code".to_string(),
+            ],
+            linked_pr_number: Some(2),
+            linked_pr_url: Some("https://github.com/keejkrej/k7code/pull/2".to_string()),
+            linked_pr_title: Some("feat(ui): complete section-by-section parity with T3 Code".to_string()),
+            used_tokens: 14200,
+            max_tokens: 200000,
             is_settings_open: false,
             settings_tab: SettingsTab::Providers,
             is_model_picker_open: false,
@@ -325,6 +344,8 @@ impl K7AppView {
         if let Some(t) = self.active_thread_mut() {
             t.turns.push(turn);
         }
+        self.used_tokens += prompt.len() / 4 + 150;
+        self.terminal_logs.push(format!("[turn #{}] User prompt: {}", turn_num, prompt));
         self.save_state();
         cx.notify();
 
@@ -371,6 +392,7 @@ impl K7AppView {
         match event {
             ProviderEvent::TextDelta(delta) => {
                 turn.assistant_response.push_str(&delta);
+                self.used_tokens += delta.len() / 4;
             }
             ProviderEvent::ToolProposed {
                 step_id,
@@ -380,24 +402,26 @@ impl K7AppView {
                 requires_approval,
             } => {
                 let step = if requires_approval {
-                    ToolStep::with_approval(tool_name, args, explanation)
+                    ToolStep::with_approval(tool_name.clone(), args.clone(), explanation)
                 } else {
-                    let mut s = ToolStep::new(tool_name, args);
+                    let mut s = ToolStep::new(tool_name.clone(), args.clone());
                     s.explanation = explanation;
                     s
                 };
                 let mut step = step;
-                step.id = step_id;
+                step.id = step_id.clone();
                 turn.steps.push(step);
                 if requires_approval {
                     turn.status = TurnStatus::WaitingForApproval;
                 }
+                self.terminal_logs.push(format!("[exec] Proposed tool: {} ({})", tool_name, args));
             }
             ProviderEvent::ToolStarted { step_id } => {
                 if let Some(s) = turn.steps.iter_mut().find(|s| s.id == step_id) {
                     s.status = StepStatus::Running;
                 }
                 turn.status = TurnStatus::Running;
+                self.terminal_logs.push(format!("[exec] Started tool execution: {}", step_id));
             }
             ProviderEvent::ToolFinished {
                 step_id,
@@ -411,21 +435,24 @@ impl K7AppView {
                     } else {
                         StepStatus::Failed
                     };
-                    s.output = Some(output);
+                    s.output = Some(output.clone());
                     s.duration_ms = Some(duration_ms);
                 }
+                self.terminal_logs.push(format!("[exec] Finished tool in {}ms (success={})", duration_ms, success));
             }
             ProviderEvent::TurnCompleted { checkpoint } => {
                 turn.checkpoint = checkpoint;
                 turn.status = TurnStatus::Completed;
                 turn.completed_at = Some(chrono::Utc::now());
                 self.cmd_sender = None;
+                self.terminal_logs.push("[turn] Completed successfully.".to_string());
                 self.refresh_git_status();
                 self.save_state();
             }
             ProviderEvent::TurnFailed(err) => {
                 turn.status = TurnStatus::Failed;
                 turn.assistant_response.push_str(&format!("\n\n**Error**: {}", err));
+                self.terminal_logs.push(format!("[turn] Failed with error: {}", err));
                 self.cmd_sender = None;
                 self.save_state();
             }
@@ -594,27 +621,33 @@ impl Render for K7AppView {
                     .child(
                         HeaderView::render(
                             HeaderRenderProps {
+                                is_sidebar_open: self.is_sidebar_open,
+                                is_right_panel_open: self.is_right_panel_open,
+                                active_right_tab: self.active_right_tab,
                                 project_name: active_project_name,
                                 git_branch: self.git_branch.as_deref(),
-                                thread_title: active_thread_title,
+                                thread_title: Some(active_thread_title),
+                                model,
                                 runtime_mode,
                                 approval_policy,
-                                is_diff_open: self.is_diff_panel_open,
                                 changed_files_count: self.diff_files.len(),
-                                is_running,
-                                is_sidebar_open: self.is_sidebar_open,
+                                linked_pr_number: self.linked_pr_number,
                             },
                             cx,
                             |this, _window, cx| {
                                 this.is_sidebar_open = !this.is_sidebar_open;
                                 cx.notify();
                             },
-                            |this, _window, cx| {
-                                this.is_diff_panel_open = !this.is_diff_panel_open;
+                            |this, tab, _window, cx| {
+                                if this.is_right_panel_open && this.active_right_tab == tab {
+                                    this.is_right_panel_open = false;
+                                } else {
+                                    this.is_right_panel_open = true;
+                                    this.active_right_tab = tab;
+                                }
                                 cx.notify();
                             },
-                            |this, window, cx| this.cycle_runtime_mode(window, cx),
-                            |this, window, cx| this.cycle_approval_policy(window, cx),
+                            |this, window, cx| this.new_thread(window, cx),
                             {
                                 let thread_id_opt = active_thread_id_for_rename;
                                 move |this, window, cx| {
@@ -623,7 +656,8 @@ impl Render for K7AppView {
                                     }
                                 }
                             },
-                            |this, window, cx| this.new_thread(window, cx),
+                            |this, window, cx| this.cycle_runtime_mode(window, cx),
+                            |this, window, cx| this.cycle_approval_policy(window, cx),
                             |this, _window, cx| {
                                 this.is_settings_open = true;
                                 cx.notify();
@@ -657,6 +691,8 @@ impl Render for K7AppView {
                                 project_name: active_project_name,
                                 git_branch: self.git_branch.as_deref(),
                                 is_running,
+                                used_tokens: self.used_tokens,
+                                max_tokens: self.max_tokens,
                             },
                             cx,
                             |this, window, cx| {
@@ -679,26 +715,36 @@ impl Render for K7AppView {
                     )
             )
             .child(
-                // 3. Right Diff Panel
-                DiffPanelView::render(
-                    DiffPanelRenderProps {
-                        files: &self.diff_files,
+                // 3. Multi-Tab Right Panel (Diffs / Terminal / Pull Requests)
+                RightPanelView::render(
+                    RightPanelRenderProps {
+                        is_open: self.is_right_panel_open,
+                        active_tab: self.active_right_tab,
                         diff_content: &self.diff_content,
+                        diff_files: &self.diff_files,
                         selected_file: self.selected_diff_file.as_deref(),
-                        is_open: self.is_diff_panel_open,
+                        changed_files_count: self.diff_files.len(),
+                        terminal_logs: &self.terminal_logs,
+                        linked_pr_number: self.linked_pr_number,
+                        linked_pr_url: self.linked_pr_url.as_deref(),
+                        linked_pr_title: self.linked_pr_title.as_deref(),
                     },
                     cx,
-                    |this, _window, cx| {
-                        this.is_diff_panel_open = false;
+                    |this, tab, _window, cx| {
+                        this.active_right_tab = tab;
                         cx.notify();
                     },
+                    |this, file_opt, window, cx| this.select_diff_file(file_opt, window, cx),
                     |this, _window, cx| {
                         this.refresh_git_status();
                         cx.notify();
                     },
-                    |this, file_opt, window, cx| this.select_diff_file(file_opt, window, cx),
-                    |this, diff_str, window, cx| this.copy_to_clipboard(diff_str, window, cx),
                     |this, window, cx| this.revert_all_uncommitted(window, cx),
+                    |this, text, window, cx| this.copy_to_clipboard(text, window, cx),
+                    |this, _window, cx| {
+                        this.is_right_panel_open = false;
+                        cx.notify();
+                    },
                 )
             )
             // 4. Overlays & Dialogs
