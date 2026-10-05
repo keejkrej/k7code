@@ -26,20 +26,32 @@ impl Project {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RuntimeMode {
-    #[serde(rename = "read-only")]
-    ReadOnly,
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
+    #[serde(rename = "approval-required", alias = "read-only")]
+    Supervised,
+    #[serde(rename = "auto-accept-edits")]
+    AutoAcceptEdits,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "full-access", alias = "danger-full-access", alias = "workspace-write")]
+    FullAccess,
 }
 
 impl RuntimeMode {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::ReadOnly => "Read Only",
-            Self::WorkspaceWrite => "Workspace Write",
-            Self::DangerFullAccess => "Full Access",
+            Self::Supervised => "Supervised",
+            Self::AutoAcceptEdits => "Auto-accept edits",
+            Self::Auto => "Auto",
+            Self::FullAccess => "Full access",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Supervised => "Ask before commands and file changes.",
+            Self::AutoAcceptEdits => "Auto-approve edits, ask before other actions.",
+            Self::Auto => "Supported providers approve routine actions; others still ask.",
+            Self::FullAccess => "Allow commands and edits without prompts.",
         }
     }
 }
@@ -59,10 +71,10 @@ pub enum ApprovalPolicy {
 impl ApprovalPolicy {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Untrusted => "Untrusted (Always Ask)",
-            Self::OnFailure => "Ask on Failure",
-            Self::OnRequest => "Ask on Sensitive",
-            Self::Never => "Never Ask (Auto)",
+            Self::Untrusted => "Untrusted",
+            Self::OnFailure => "On Failure",
+            Self::OnRequest => "On Request",
+            Self::Never => "Never (Auto)",
         }
     }
 }
@@ -288,7 +300,7 @@ impl Thread {
             title: title.into(),
             pinned: false,
             archived: false,
-            runtime_mode: RuntimeMode::WorkspaceWrite,
+            runtime_mode: RuntimeMode::AutoAcceptEdits,
             approval_policy: ApprovalPolicy::Untrusted,
             provider: ProviderKind::Claude,
             model: "claude-3-7-sonnet".to_string(),
@@ -335,7 +347,7 @@ impl Default for AppSettings {
             default_provider: ProviderKind::Claude,
             default_model: "claude-3-7-sonnet".to_string(),
             default_approval_policy: ApprovalPolicy::Untrusted,
-            default_runtime_mode: RuntimeMode::WorkspaceWrite,
+            default_runtime_mode: RuntimeMode::AutoAcceptEdits,
             theme: "dark".to_string(),
         }
     }

@@ -32,22 +32,32 @@ impl ChatView {
 
         let mut turn_elements = Vec::new();
         for turn in props.turns {
-            turn_elements.push(Self::render_turn(
-                turn,
-                cx,
-                on_approve_tool.clone(),
-                on_reject_tool.clone(),
-                on_revert_turn.clone(),
-            ).into_any_element());
+            turn_elements.push(
+                Self::render_turn(
+                    turn,
+                    cx,
+                    on_approve_tool.clone(),
+                    on_reject_tool.clone(),
+                    on_revert_turn.clone(),
+                )
+                .into_any_element(),
+            );
         }
 
         v_flex()
             .flex_1()
             .w_full()
             .overflow_hidden()
+            .items_center()
             .p_4()
             .gap_4()
-            .children(turn_elements)
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(gpui::px(860.0))
+                    .gap_4()
+                    .children(turn_elements)
+            )
             .into_any_element()
     }
 
@@ -61,71 +71,103 @@ impl ChatView {
             .items_center()
             .justify_center()
             .p_8()
-            .gap_6()
+            .gap_8()
             .child(
+                // Draft Hero Headline matching T3 Code DraftHeroHeadline.tsx
                 v_flex()
                     .items_center()
                     .gap_2()
                     .child(
-                        Icon::new(IconName::Sparkles)
-                            .small()
-                            .text_color(cx.theme().primary)
-                    )
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child("What would you like to build?")
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Icon::new(IconName::Sparkles)
+                                    .small()
+                                    .text_color(cx.theme().primary)
+                            )
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child("Where should we start?")
+                            )
                     )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Select a starter action or type a custom prompt below.")
+                            .child("Select a starter task or type your instructions into the composer below.")
                     )
             )
+            // 2x2 Starter Cards Grid matching T3 Code
             .child(
-                h_flex()
+                v_flex()
+                    .max_w(gpui::px(680.0))
+                    .w_full()
                     .gap_3()
                     .child(
-                        Button::new("starter-git")
-                            .outline()
-                            .small()
-                            .icon(IconName::GitBranch)
-                            .label("Show git status and recent diff")
-                            .on_click(cx.listener({
-                                let on_starter_prompt = on_starter_prompt.clone();
-                                move |this, _, window, cx| {
-                                    on_starter_prompt(this, "git status and show changed files".to_string(), window, cx);
-                                }
-                            }))
+                        h_flex()
+                            .w_full()
+                            .gap_3()
+                            .child(
+                                Button::new("starter-git")
+                                    .secondary()
+                                    .flex_1()
+                                    .icon(IconName::GitBranch)
+                                    .label("Show Working Tree & Git Status")
+                                    .on_click(cx.listener({
+                                        let on_starter_prompt = on_starter_prompt.clone();
+                                        move |this, _, window, cx| {
+                                            on_starter_prompt(this, "git status and show modified files".to_string(), window, cx);
+                                        }
+                                    }))
+                            )
+                            .child(
+                                Button::new("starter-check")
+                                    .secondary()
+                                    .flex_1()
+                                    .icon(IconName::Terminal)
+                                    .label("Run Cargo Check")
+                                    .on_click(cx.listener({
+                                        let on_starter_prompt = on_starter_prompt.clone();
+                                        move |this, _, window, cx| {
+                                            on_starter_prompt(this, "run cargo check".to_string(), window, cx);
+                                        }
+                                    }))
+                            )
                     )
                     .child(
-                        Button::new("starter-check")
-                            .outline()
-                            .small()
-                            .icon(IconName::Terminal)
-                            .label("Run cargo check")
-                            .on_click(cx.listener({
-                                let on_starter_prompt = on_starter_prompt.clone();
-                                move |this, _, window, cx| {
-                                    on_starter_prompt(this, "run cargo check".to_string(), window, cx);
-                                }
-                            }))
-                    )
-                    .child(
-                        Button::new("starter-test")
-                            .outline()
-                            .small()
-                            .icon(IconName::Terminal)
-                            .label("Run tests")
-                            .on_click(cx.listener({
-                                let on_starter_prompt = on_starter_prompt.clone();
-                                move |this, _, window, cx| {
-                                    on_starter_prompt(this, "run cargo test".to_string(), window, cx);
-                                }
-                            }))
+                        h_flex()
+                            .w_full()
+                            .gap_3()
+                            .child(
+                                Button::new("starter-arch")
+                                    .secondary()
+                                    .flex_1()
+                                    .icon(IconName::Blocks)
+                                    .label("Explain Project Architecture")
+                                    .on_click(cx.listener({
+                                        let on_starter_prompt = on_starter_prompt.clone();
+                                        move |this, _, window, cx| {
+                                            on_starter_prompt(this, "summarize project architecture and core modules".to_string(), window, cx);
+                                        }
+                                    }))
+                            )
+                            .child(
+                                Button::new("starter-test")
+                                    .secondary()
+                                    .flex_1()
+                                    .icon(IconName::Check)
+                                    .label("Run Test Suite")
+                                    .on_click(cx.listener({
+                                        let on_starter_prompt = on_starter_prompt.clone();
+                                        move |this, _, window, cx| {
+                                            on_starter_prompt(this, "run cargo test".to_string(), window, cx);
+                                        }
+                                    }))
+                            )
                     )
             )
     }
@@ -142,36 +184,56 @@ impl ChatView {
 
         let mut step_elements = Vec::new();
         for step in &turn.steps {
-            step_elements.push(Self::render_tool_step(step, cx, on_approve_tool.clone(), on_reject_tool.clone()).into_any_element());
+            step_elements.push(
+                Self::render_tool_step(step, cx, on_approve_tool.clone(), on_reject_tool.clone())
+                    .into_any_element(),
+            );
         }
 
         v_flex()
             .w_full()
             .gap_3()
-            // 1. User Prompt Bubble (right-aligned)
+            // 1. User Prompt Bubble (right-aligned card)
             .child(
                 h_flex()
                     .w_full()
                     .justify_end()
                     .child(
-                        div()
-                            .max_w_128()
-                            .p_3()
+                        v_flex()
+                            .max_w(gpui::px(640.0))
+                            .p_3p5()
                             .rounded(cx.theme().radius)
-                            .bg(cx.theme().primary.opacity(0.15))
+                            .bg(cx.theme().accent.opacity(0.15))
                             .border_1()
-                            .border_color(cx.theme().primary.opacity(0.3))
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .child(turn.user_prompt.clone())
+                            .border_color(cx.theme().primary.opacity(0.35))
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(Icon::new(IconName::User).small().text_color(cx.theme().primary))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(cx.theme().primary)
+                                            .child(format!("You · Turn #{}", turn.turn_number))
+                                    )
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().foreground)
+                                    .child(turn.user_prompt.clone())
+                            )
                     )
             )
-            // 2. Tool Execution Steps (terminal cards, approvals, outputs)
+            // 2. Tool Execution Steps (cards, approvals, terminal outputs)
             .when(!turn.steps.is_empty(), |this| {
                 this.child(
                     v_flex()
                         .w_full()
-                        .gap_2()
+                        .gap_2p5()
                         .children(step_elements)
                 )
             })
@@ -180,9 +242,9 @@ impl ChatView {
                 this.child(
                     v_flex()
                         .w_full()
-                        .p_3()
+                        .p_4()
                         .rounded(cx.theme().radius)
-                        .bg(cx.theme().secondary.opacity(0.3))
+                        .bg(cx.theme().secondary.opacity(0.25))
                         .border_1()
                         .border_color(cx.theme().border)
                         .gap_2()
@@ -221,7 +283,7 @@ impl ChatView {
                         })
                 )
             })
-            // 4. Git Checkpoint & Revert Banner
+            // 4. Git Checkpoint & Revert Banner matching T3 Code CheckpointCard
             .when(turn.checkpoint.is_some(), |this| {
                 let cp = turn.checkpoint.as_ref().unwrap();
                 let sha = cp.git_sha.as_deref().unwrap_or("unknown");
@@ -230,9 +292,9 @@ impl ChatView {
                 this.child(
                     h_flex()
                         .w_full()
-                        .p_2()
+                        .p_2p5()
                         .rounded(cx.theme().radius)
-                        .bg(cx.theme().accent.opacity(0.1))
+                        .bg(cx.theme().secondary.opacity(0.35))
                         .border_1()
                         .border_color(cx.theme().border)
                         .items_center()
@@ -241,12 +303,12 @@ impl ChatView {
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(Icon::new(IconName::GitCommitHorizontal).small().text_color(cx.theme().muted_foreground))
+                                .child(Icon::new(IconName::GitCommitHorizontal).small().text_color(cx.theme().primary))
                                 .child(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(format!("Checkpoint SHA: {} ({} files modified)", sha, files_count))
+                                        .child(format!("Checkpoint: {} ({} files affected)", sha, files_count))
                                 )
                         )
                         .child(
@@ -285,7 +347,7 @@ impl ChatView {
                     .w_full()
                     .px_3()
                     .py_2()
-                    .bg(cx.theme().secondary.opacity(0.2))
+                    .bg(cx.theme().secondary.opacity(0.3))
                     .items_center()
                     .justify_between()
                     .child(
@@ -303,7 +365,7 @@ impl ChatView {
                     )
                     .child(
                         match step.status {
-                            StepStatus::PendingApproval => Badge::new().child("Pending Approval"),
+                            StepStatus::PendingApproval => Badge::new().child("Needs Approval"),
                             StepStatus::Running => Badge::new().child("Running..."),
                             StepStatus::Completed => Badge::new().child("Completed"),
                             StepStatus::Failed => Badge::new().child("Failed"),
@@ -328,13 +390,16 @@ impl ChatView {
                     v_flex()
                         .p_3()
                         .bg(cx.theme().accent.opacity(0.15))
+                        .border_t_1()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
                         .gap_2()
                         .child(
                             div()
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(cx.theme().foreground)
-                                .child("This tool invocation requires confirmation to execute.")
+                                .child("This tool proposal requires authorization before running on your machine.")
                         )
                         .child(
                             h_flex()
@@ -369,7 +434,7 @@ impl ChatView {
                 this.child(
                     div()
                         .p_3()
-                        .bg(cx.theme().secondary.opacity(0.3))
+                        .bg(cx.theme().secondary.opacity(0.4))
                         .max_h_64()
                         .overflow_hidden()
                         .text_xs()

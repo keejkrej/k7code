@@ -29,8 +29,73 @@ impl DiffPanelView {
             return div().into_any_element();
         }
 
+        // Parse diff lines into syntax colored elements
+        let mut diff_line_elements = Vec::new();
+        if props.diff_content.is_empty() {
+            diff_line_elements.push(
+                div()
+                    .p_4()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Working tree clean. No local modifications.")
+                    .into_any_element(),
+            );
+        } else {
+            for line in props.diff_content.lines().take(300) {
+                if line.starts_with('+') && !line.starts_with("+++") {
+                    diff_line_elements.push(
+                        div()
+                            .w_full()
+                            .px_2()
+                            .py_0p5()
+                            .bg(gpui::rgba(0x22c55e1a))
+                            .text_color(gpui::rgb(0x4ade80))
+                            .text_xs()
+                            .child(line.to_string())
+                            .into_any_element(),
+                    );
+                } else if line.starts_with('-') && !line.starts_with("---") {
+                    diff_line_elements.push(
+                        div()
+                            .w_full()
+                            .px_2()
+                            .py_0p5()
+                            .bg(gpui::rgba(0xef44441a))
+                            .text_color(gpui::rgb(0xf87171))
+                            .text_xs()
+                            .child(line.to_string())
+                            .into_any_element(),
+                    );
+                } else if line.starts_with("@@") {
+                    diff_line_elements.push(
+                        div()
+                            .w_full()
+                            .px_2()
+                            .py_0p5()
+                            .bg(gpui::rgba(0x38bdf81a))
+                            .text_color(gpui::rgb(0x38bdf8))
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(line.to_string())
+                            .into_any_element(),
+                    );
+                } else {
+                    diff_line_elements.push(
+                        div()
+                            .w_full()
+                            .px_2()
+                            .py_0p5()
+                            .text_color(cx.theme().muted_foreground)
+                            .text_xs()
+                            .child(line.to_string())
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
+
         v_flex()
-            .w_96()
+            .w(gpui::px(420.0))
             .h_full()
             .border_l_1()
             .border_color(cx.theme().border)
@@ -42,7 +107,7 @@ impl DiffPanelView {
                     .child(
                         // Header
                         h_flex()
-                            .h(gpui::px(56.0))
+                            .h(gpui::px(52.0))
                             .px_4()
                             .border_b_1()
                             .border_color(cx.theme().border)
@@ -58,7 +123,7 @@ impl DiffPanelView {
                                             .text_sm()
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(cx.theme().foreground)
-                                            .child("Thread Diff & Changes")
+                                            .child("Working Tree Changes")
                                     )
                             )
                             .child(
@@ -84,14 +149,14 @@ impl DiffPanelView {
                                     .text_xs()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!("CHANGED FILES ({})", props.files.len()))
+                                    .child("UNCOMMITTED CHANGES")
                             )
                             .when(props.files.is_empty(), |this| {
                                 this.child(
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("No modified files in working tree.")
+                                        .child("Working directory clean")
                                 )
                             })
                             .children(props.files.iter().map(|f| {
@@ -113,12 +178,14 @@ impl DiffPanelView {
                                             .when(f.additions > 0, |this| {
                                                 this.child(
                                                     Badge::new()
+                                                        .small()
                                                         .child(format!("+{}", f.additions))
                                                 )
                                             })
                                             .when(f.deletions > 0, |this| {
                                                 this.child(
                                                     Badge::new()
+                                                        .small()
                                                         .child(format!("-{}", f.deletions))
                                                 )
                                             })
@@ -129,28 +196,23 @@ impl DiffPanelView {
                     .child(
                         v_flex()
                             .p_3()
-                            .gap_1()
+                            .gap_2()
                             .child(
                                 div()
                                     .text_xs()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("UNIFIED DIFF")
+                                    .child("DIFF PREVIEW")
                             )
                             .child(
-                                div()
-                                    .p_3()
+                                v_flex()
                                     .rounded(cx.theme().radius)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
                                     .bg(cx.theme().secondary.opacity(0.2))
-                                    .max_h_96()
+                                    .max_h(gpui::px(440.0))
                                     .overflow_hidden()
-                                    .text_xs()
-                                    .text_color(cx.theme().foreground)
-                                    .child(if props.diff_content.is_empty() {
-                                        "No git diff available.".to_string()
-                                    } else {
-                                        props.diff_content.to_string()
-                                    })
+                                    .children(diff_line_elements)
                             )
                     )
             )
@@ -165,7 +227,7 @@ impl DiffPanelView {
                             .danger()
                             .w_full()
                             .icon(IconName::RotateCcw)
-                            .label("Discard All Uncommitted Changes")
+                            .label("Discard All Changes (Hard Reset)")
                             .on_click(cx.listener({
                                 let on_revert_all = on_revert_all.clone();
                                 move |this, _, window, cx| on_revert_all(this, window, cx)
