@@ -16,8 +16,8 @@ use gpui_kit::*;
 
 use crate::git::GitManager;
 use crate::model::{
-    AppData, ApprovalPolicy, Project, ProviderKind, RuntimeMode, StepStatus, Thread, ToolStep,
-    Turn, TurnStatus,
+    AppData, ApprovalPolicy, FileDiffSummary, Project, ProviderKind, RuntimeMode, StepStatus,
+    Thread, ToolStep, Turn, TurnStatus,
 };
 use crate::provider::{
     ExecutionContext, ProviderDetector, ProviderEvent, ProviderRunner, ProviderStatus,
@@ -28,8 +28,10 @@ use crate::ui::chat::{ChatRenderProps, ChatView};
 use crate::ui::composer::{ComposerRenderProps, ComposerView};
 use crate::ui::diff_panel::{DiffPanelRenderProps, DiffPanelView};
 use crate::ui::header::{HeaderRenderProps, HeaderView};
-use crate::ui::settings_modal::{SettingsModalView, SettingsRenderProps};
-use crate::ui::sidebar::{SidebarRenderProps, SidebarView, ThreadFilterTab};
+use crate::ui::model_picker::{ModelPickerModalView, ModelPickerRenderProps};
+use crate::ui::rename_modal::{RenameModalRenderProps, RenameModalView};
+use crate::ui::settings_modal::{SettingsModalView, SettingsRenderProps, SettingsTab};
+use crate::ui::sidebar::{SidebarFilter, SidebarRenderProps, SidebarView};
 use crate::ui::v_flex;
 
 pub struct K7AppView {
@@ -39,13 +41,25 @@ pub struct K7AppView {
     pub provider_statuses: HashMap<ProviderKind, ProviderStatus>,
 
     pub input_state: Entity<InputState>,
-    pub filter_tab: ThreadFilterTab,
+    pub search_input_state: Entity<InputState>,
+    pub rename_input_state: Entity<InputState>,
+
+    pub is_sidebar_open: bool,
+    pub sidebar_filter: SidebarFilter,
+
     pub is_diff_panel_open: bool,
-    pub is_settings_open: bool,
-
+    pub diff_files: Vec<FileDiffSummary>,
     pub diff_content: String,
-    pub git_branch: Option<String>,
+    pub selected_diff_file: Option<String>,
 
+    pub is_settings_open: bool,
+    pub settings_tab: SettingsTab,
+
+    pub is_model_picker_open: bool,
+    pub is_rename_open: bool,
+    pub renaming_thread_id: Option<String>,
+
+    pub git_branch: Option<String>,
     pub cmd_sender: Option<Sender<RunnerCommand>>,
 }
 
@@ -58,7 +72,17 @@ impl K7AppView {
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Type your prompt or instructions (e.g. 'run cargo check')...")
+                .placeholder("Ask a question or describe a task (e.g. 'run cargo check')...")
+        });
+
+        let search_input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search threads...")
+        });
+
+        let rename_input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Enter new thread title...")
         });
 
         let mut app = Self {
@@ -67,17 +91,26 @@ impl K7AppView {
             runner,
             provider_statuses,
             input_state: input_state.clone(),
-            filter_tab: ThreadFilterTab::Active,
+            search_input_state,
+            rename_input_state,
+            is_sidebar_open: true,
+            sidebar_filter: SidebarFilter::Active,
             is_diff_panel_open: false,
-            is_settings_open: false,
+            diff_files: Vec::new(),
             diff_content: String::new(),
+            selected_diff_file: None,
+            is_settings_open: false,
+            settings_tab: SettingsTab::Providers,
+            is_model_picker_open: false,
+            is_rename_open: false,
+            renaming_thread_id: None,
             git_branch: None,
             cmd_sender: None,
         };
 
         app.refresh_git_status();
 
-        // Subscribe to input enter event
+        // Subscribe to composer input enter event
         cx.subscribe_in(&input_state, window, |this, state, event, window, cx| {
             if let InputEvent::PressEnter { secondary: false, .. } = event {
                 let prompt = state.read(cx).value().to_string();
@@ -96,8 +129,16 @@ impl K7AppView {
         let path = self.active_project().map(|p| p.path.clone());
         if let Some(p) = path {
             self.git_branch = GitManager::current_branch(&p);
-            let (_files, diff) = GitManager::get_diff_summary(&p, None);
-            self.diff_content = diff;
+            if let Some(ref file) = self.selected_diff_file {
+                let (all_files, _) = GitManager::get_diff_summary(&p, None);
+                let file_diff = GitManager::get_file_diff(&p, file);
+                self.diff_files = all_files;
+                self.diff_content = file_diff;
+            } else {
+                let (files, diff) = GitManager::get_diff_summary(&p, None);
+                self.diff_files = files;
+                self.diff_content = diff;
+            }
         }
     }
 
@@ -122,6 +163,7 @@ impl K7AppView {
 
     pub fn select_thread(&mut self, thread_id: String, _window: &mut Window, cx: &mut Context<Self>) {
         self.data.active_thread_id = Some(thread_id);
+        self.selected_diff_file = None;
         self.refresh_git_status();
         self.save_state();
         cx.notify();
@@ -134,6 +176,7 @@ impl K7AppView {
             let tid = new_t.id.clone();
             self.data.threads.insert(0, new_t);
             self.data.active_thread_id = Some(tid);
+            self.selected_diff_file = None;
             self.refresh_git_status();
             self.save_state();
             cx.notify();
@@ -166,8 +209,35 @@ impl K7AppView {
         cx.notify();
     }
 
-    pub fn change_filter_tab(&mut self, tab: ThreadFilterTab, _window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_tab = tab;
+    pub fn change_filter_tab(&mut self, filter: SidebarFilter, _window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_filter = filter;
+        cx.notify();
+    }
+
+    pub fn open_rename_modal(&mut self, thread_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(thread) = self.data.threads.iter().find(|t| t.id == thread_id) {
+            let title = thread.title.clone();
+            self.rename_input_state.update(cx, |s, cx| {
+                s.set_value(&title, window, cx);
+            });
+            self.renaming_thread_id = Some(thread_id);
+            self.is_rename_open = true;
+            cx.notify();
+        }
+    }
+
+    pub fn save_rename_modal(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(thread_id) = self.renaming_thread_id.take() {
+            let new_title = self.rename_input_state.read(cx).value().trim().to_string();
+            if !new_title.is_empty() {
+                if let Some(thread) = self.data.threads.iter_mut().find(|t| t.id == thread_id) {
+                    thread.title = new_title;
+                    thread.updated_at = chrono::Utc::now();
+                    self.save_state();
+                }
+            }
+        }
+        self.is_rename_open = false;
         cx.notify();
     }
 
@@ -187,38 +257,46 @@ impl K7AppView {
     pub fn cycle_approval_policy(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(t) = self.active_thread_mut() {
             t.approval_policy = match t.approval_policy {
-                ApprovalPolicy::Untrusted => crate::model::ApprovalPolicy::OnRequest,
-                ApprovalPolicy::OnRequest => crate::model::ApprovalPolicy::OnFailure,
-                ApprovalPolicy::OnFailure => crate::model::ApprovalPolicy::Never,
-                ApprovalPolicy::Never => crate::model::ApprovalPolicy::Untrusted,
+                ApprovalPolicy::Untrusted => ApprovalPolicy::OnRequest,
+                ApprovalPolicy::OnRequest => ApprovalPolicy::OnFailure,
+                ApprovalPolicy::OnFailure => ApprovalPolicy::Never,
+                ApprovalPolicy::Never => ApprovalPolicy::Untrusted,
             };
             self.save_state();
             cx.notify();
         }
     }
 
-    pub fn cycle_model(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn select_provider_and_model(
+        &mut self,
+        provider: ProviderKind,
+        model: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(t) = self.active_thread_mut() {
-            let providers = [
-                ProviderKind::Claude,
-                ProviderKind::Codex,
-                ProviderKind::Cursor,
-                ProviderKind::Grok,
-                ProviderKind::OpenCode,
-                ProviderKind::Antigravity,
-                ProviderKind::Ollama,
-            ];
-
-            let curr_idx = providers.iter().position(|p| *p == t.provider).unwrap_or(0);
-            let next_provider = providers[(curr_idx + 1) % providers.len()];
-            let models = next_provider.available_models();
-            let next_model = models.first().map(|m| m.id.clone()).unwrap_or_else(|| "default".to_string());
-
-            t.provider = next_provider;
-            t.model = next_model;
+            t.provider = provider;
+            t.model = model;
+            t.updated_at = chrono::Utc::now();
             self.save_state();
-            cx.notify();
         }
+        self.is_model_picker_open = false;
+        cx.notify();
+    }
+
+    pub fn select_diff_file(&mut self, file: Option<String>, _window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_diff_file = file;
+        self.refresh_git_status();
+        cx.notify();
+    }
+
+    pub fn rescan_providers(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.provider_statuses = ProviderDetector::detect_all();
+        cx.notify();
+    }
+
+    pub fn copy_to_clipboard(&mut self, text: String, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
     }
 
     pub fn submit_prompt(&mut self, prompt: String, _window: &mut Window, cx: &mut Context<Self>) {
@@ -267,7 +345,7 @@ impl K7AppView {
         let runner = Arc::clone(&self.runner);
         runner.run_turn(exec_ctx, event_sender, cmd_receiver);
 
-        // Spawn background listener in GPUI executor to update UI as events stream in!
+        // Spawn background listener in GPUI executor to update UI as events stream in
         cx.spawn(async move |this, cx| {
             while let Ok(event) = event_receiver.recv().await {
                 let _ = this.update(cx, |view, cx| {
@@ -411,6 +489,7 @@ impl K7AppView {
                 let _ = GitManager::revert_to_sha(&proj.path, &sha);
             }
         }
+        self.selected_diff_file = None;
         self.refresh_git_status();
         self.save_state();
         cx.notify();
@@ -436,22 +515,38 @@ impl K7AppView {
 
 impl Render for K7AppView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (active_thread, is_running, turns_slice, provider, model) = match self.active_thread() {
+        let (active_thread, is_running, turns_slice, provider, model, runtime_mode, approval_policy) = match self.active_thread() {
             Some(t) => (
                 Some(t),
                 t.is_running(),
                 t.turns.as_slice(),
                 t.provider,
                 t.model.as_str(),
+                t.runtime_mode,
+                t.approval_policy,
             ),
-            None => (None, false, [].as_slice(), ProviderKind::Claude, "claude-3-7-sonnet"),
+            None => (
+                None,
+                false,
+                [].as_slice(),
+                ProviderKind::Claude,
+                "claude-3-7-sonnet",
+                RuntimeMode::Supervised,
+                ApprovalPolicy::Untrusted,
+            ),
         };
 
-        let active_provider_name = active_thread
-            .map(|t| t.provider.display_name())
-            .unwrap_or("Claude Code");
+        let active_project_name = self
+            .active_project()
+            .map(|p| p.name.as_str())
+            .unwrap_or("k7code");
 
-        let changed_files_count = if !self.diff_content.is_empty() { 1 } else { 0 };
+        let active_thread_title = active_thread
+            .map(|t| t.title.as_str())
+            .unwrap_or("New Thread");
+
+        let active_thread_id_for_rename = self.data.active_thread_id.clone();
+        let search_query = self.search_input_state.read(cx).value().to_string();
 
         div()
             .flex()
@@ -459,29 +554,36 @@ impl Render for K7AppView {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(
-                // 1. Left Sidebar
-                SidebarView::render(
-                    SidebarRenderProps {
-                        projects: &self.data.projects,
-                        active_project: self.active_project(),
-                        threads: &self.data.threads,
-                        active_thread_id: self.data.active_thread_id.as_deref(),
-                        selected_tab: self.filter_tab,
-                        detected_providers_count: self.provider_statuses.values().filter(|s| s.is_available).count(),
-                        active_provider_name,
-                    },
-                    cx,
-                    |this, tid, window, cx| this.select_thread(tid, window, cx),
-                    |this, window, cx| this.new_thread(window, cx),
-                    |this, tid, window, cx| this.toggle_pin(tid, window, cx),
-                    |this, tid, window, cx| this.toggle_archive(tid, window, cx),
-                    |this, tid, window, cx| this.delete_thread(tid, window, cx),
-                    |this, tab, window, cx| this.change_filter_tab(tab, window, cx),
-                    |this, _window, cx| {
-                        this.is_settings_open = true;
-                        cx.notify();
-                    },
-                )
+                // 1. Left Collapsible Sidebar
+                if self.is_sidebar_open {
+                    SidebarView::render(
+                        SidebarRenderProps {
+                            projects: &self.data.projects,
+                            active_project: self.active_project(),
+                            threads: &self.data.threads,
+                            active_thread_id: self.data.active_thread_id.as_deref(),
+                            active_provider: provider,
+                            available_providers_count: self.provider_statuses.values().filter(|s| s.is_available).count(),
+                            current_filter: self.sidebar_filter,
+                            search_input_state: &self.search_input_state,
+                            search_query: &search_query,
+                        },
+                        cx,
+                        |this, tid, window, cx| this.select_thread(tid, window, cx),
+                        |this, window, cx| this.new_thread(window, cx),
+                        |this, filter, window, cx| this.change_filter_tab(filter, window, cx),
+                        |this, tid, window, cx| this.toggle_pin(tid, window, cx),
+                        |this, tid, window, cx| this.toggle_archive(tid, window, cx),
+                        |this, tid, window, cx| this.open_rename_modal(tid, window, cx),
+                        |this, tid, window, cx| this.delete_thread(tid, window, cx),
+                        |this, _window, cx| {
+                            this.is_settings_open = true;
+                            cx.notify();
+                        },
+                    ).into_any_element()
+                } else {
+                    div().into_any_element()
+                }
             )
             .child(
                 // 2. Center Main View: Header + Conversation / Empty + Floating Composer
@@ -492,19 +594,40 @@ impl Render for K7AppView {
                     .child(
                         HeaderView::render(
                             HeaderRenderProps {
-                                active_project: self.active_project(),
-                                active_thread,
+                                project_name: active_project_name,
                                 git_branch: self.git_branch.as_deref(),
-                                changed_files_count,
-                                is_diff_panel_open: self.is_diff_panel_open,
+                                thread_title: active_thread_title,
+                                runtime_mode,
+                                approval_policy,
+                                is_diff_open: self.is_diff_panel_open,
+                                changed_files_count: self.diff_files.len(),
+                                is_running,
+                                is_sidebar_open: self.is_sidebar_open,
                             },
                             cx,
+                            |this, _window, cx| {
+                                this.is_sidebar_open = !this.is_sidebar_open;
+                                cx.notify();
+                            },
                             |this, _window, cx| {
                                 this.is_diff_panel_open = !this.is_diff_panel_open;
                                 cx.notify();
                             },
                             |this, window, cx| this.cycle_runtime_mode(window, cx),
                             |this, window, cx| this.cycle_approval_policy(window, cx),
+                            {
+                                let thread_id_opt = active_thread_id_for_rename;
+                                move |this, window, cx| {
+                                    if let Some(ref tid) = thread_id_opt {
+                                        this.open_rename_modal(tid.clone(), window, cx);
+                                    }
+                                }
+                            },
+                            |this, window, cx| this.new_thread(window, cx),
+                            |this, _window, cx| {
+                                this.is_settings_open = true;
+                                cx.notify();
+                            },
                         )
                     )
                     .child(
@@ -512,12 +635,16 @@ impl Render for K7AppView {
                             ChatRenderProps {
                                 turns: turns_slice,
                                 is_running,
+                                project_name: active_project_name,
+                                git_branch: self.git_branch.as_deref(),
+                                changed_files_count: self.diff_files.len(),
                             },
                             cx,
                             |this, sid, window, cx| this.approve_tool(sid, window, cx),
                             |this, sid, window, cx| this.reject_tool(sid, window, cx),
                             |this, tid, window, cx| this.revert_turn(tid, window, cx),
                             |this, prompt, window, cx| this.submit_prompt(prompt, window, cx),
+                            |this, text, window, cx| this.copy_to_clipboard(text, window, cx),
                         )
                     )
                     .child(
@@ -526,6 +653,9 @@ impl Render for K7AppView {
                                 input_state: &self.input_state,
                                 provider,
                                 model,
+                                runtime_mode,
+                                project_name: active_project_name,
+                                git_branch: self.git_branch.as_deref(),
                                 is_running,
                             },
                             cx,
@@ -537,7 +667,14 @@ impl Render for K7AppView {
                                 }
                             },
                             |this, window, cx| this.cancel_turn(window, cx),
-                            |this, window, cx| this.cycle_model(window, cx),
+                            |this, _window, cx| {
+                                this.is_model_picker_open = true;
+                                cx.notify();
+                            },
+                            |this, window, cx| {
+                                this.input_state.update(cx, |s, cx| s.set_value("", window, cx));
+                                cx.notify();
+                            },
                         )
                     )
             )
@@ -545,8 +682,9 @@ impl Render for K7AppView {
                 // 3. Right Diff Panel
                 DiffPanelView::render(
                     DiffPanelRenderProps {
-                        files: &[],
+                        files: &self.diff_files,
                         diff_content: &self.diff_content,
+                        selected_file: self.selected_diff_file.as_deref(),
                         is_open: self.is_diff_panel_open,
                     },
                     cx,
@@ -554,18 +692,72 @@ impl Render for K7AppView {
                         this.is_diff_panel_open = false;
                         cx.notify();
                     },
+                    |this, _window, cx| {
+                        this.refresh_git_status();
+                        cx.notify();
+                    },
+                    |this, file_opt, window, cx| this.select_diff_file(file_opt, window, cx),
+                    |this, diff_str, window, cx| this.copy_to_clipboard(diff_str, window, cx),
                     |this, window, cx| this.revert_all_uncommitted(window, cx),
                 )
             )
+            // 4. Overlays & Dialogs
             .child(
-                // 4. Modal Overlay for Settings
+                // Model & Provider Picker Dialog
+                ModelPickerModalView::render(
+                    ModelPickerRenderProps {
+                        is_open: self.is_model_picker_open,
+                        current_provider: provider,
+                        current_model: model,
+                    },
+                    cx,
+                    |this, prov, mdl, window, cx| this.select_provider_and_model(prov, mdl, window, cx),
+                    |this, _window, cx| {
+                        this.is_model_picker_open = false;
+                        cx.notify();
+                    },
+                )
+            )
+            .child(
+                // Thread Rename Dialog
+                RenameModalView::render(
+                    RenameModalRenderProps {
+                        is_open: self.is_rename_open,
+                        input_state: &self.rename_input_state,
+                    },
+                    cx,
+                    |this, window, cx| this.save_rename_modal(window, cx),
+                    |this, _window, cx| {
+                        this.is_rename_open = false;
+                        cx.notify();
+                    },
+                )
+            )
+            .child(
+                // Settings & Configuration Modal
                 SettingsModalView::render(
                     SettingsRenderProps {
                         is_open: self.is_settings_open,
-                        settings: &self.data.settings,
+                        current_tab: self.settings_tab,
+                        app_data: &self.data,
                         provider_statuses: &self.provider_statuses,
                     },
                     cx,
+                    |this, tab, _window, cx| {
+                        this.settings_tab = tab;
+                        cx.notify();
+                    },
+                    |this, window, cx| this.rescan_providers(window, cx),
+                    |this, mode, _window, cx| {
+                        this.data.settings.default_runtime_mode = mode;
+                        this.save_state();
+                        cx.notify();
+                    },
+                    |this, policy, _window, cx| {
+                        this.data.settings.default_approval_policy = policy;
+                        this.save_state();
+                        cx.notify();
+                    },
                     |this, _window, cx| {
                         this.is_settings_open = false;
                         cx.notify();

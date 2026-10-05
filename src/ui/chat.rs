@@ -7,12 +7,15 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::model::{StepStatus, ToolStep, Turn, TurnStatus};
+use crate::model::{StepStatus, Turn, TurnStatus};
 use crate::ui::{h_flex, v_flex};
 
 pub struct ChatRenderProps<'a> {
     pub turns: &'a [Turn],
     pub is_running: bool,
+    pub project_name: &'a str,
+    pub git_branch: Option<&'a str>,
+    pub changed_files_count: usize,
 }
 
 pub struct ChatView;
@@ -21,426 +24,574 @@ impl ChatView {
     pub fn render<V: 'static>(
         props: ChatRenderProps<'_>,
         cx: &mut Context<V>,
-        on_approve_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_reject_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_revert_turn: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_approve_step: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_reject_step: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_revert_checkpoint: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
         on_starter_prompt: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_copy_text: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
     ) -> impl IntoElement {
         if props.turns.is_empty() {
-            return Self::render_empty_state(cx, on_starter_prompt).into_any_element();
-        }
-
-        let mut turn_elements = Vec::new();
-        for turn in props.turns {
-            turn_elements.push(
-                Self::render_turn(
-                    turn,
-                    cx,
-                    on_approve_tool.clone(),
-                    on_reject_tool.clone(),
-                    on_revert_turn.clone(),
-                )
-                .into_any_element(),
-            );
-        }
-
-        v_flex()
-            .flex_1()
-            .w_full()
-            .overflow_hidden()
-            .items_center()
-            .p_4()
-            .gap_4()
-            .child(
-                v_flex()
-                    .w_full()
-                    .max_w(gpui::px(860.0))
-                    .gap_4()
-                    .children(turn_elements)
-            )
-            .into_any_element()
-    }
-
-    fn render_empty_state<V: 'static>(
-        cx: &mut Context<V>,
-        on_starter_prompt: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-    ) -> impl IntoElement {
-        v_flex()
-            .flex_1()
-            .w_full()
-            .items_center()
-            .justify_center()
-            .p_8()
-            .gap_8()
-            .child(
-                // Draft Hero Headline matching T3 Code DraftHeroHeadline.tsx
-                v_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(IconName::Sparkles)
-                                    .small()
-                                    .text_color(cx.theme().primary)
-                            )
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(cx.theme().foreground)
-                                    .child("Where should we start?")
-                            )
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Select a starter task or type your instructions into the composer below.")
-                    )
-            )
-            // 2x2 Starter Cards Grid matching T3 Code
-            .child(
-                v_flex()
-                    .max_w(gpui::px(680.0))
-                    .w_full()
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_3()
-                            .child(
-                                Button::new("starter-git")
-                                    .secondary()
-                                    .flex_1()
-                                    .icon(IconName::GitBranch)
-                                    .label("Show Working Tree & Git Status")
-                                    .on_click(cx.listener({
-                                        let on_starter_prompt = on_starter_prompt.clone();
-                                        move |this, _, window, cx| {
-                                            on_starter_prompt(this, "git status and show modified files".to_string(), window, cx);
-                                        }
-                                    }))
-                            )
-                            .child(
-                                Button::new("starter-check")
-                                    .secondary()
-                                    .flex_1()
-                                    .icon(IconName::Terminal)
-                                    .label("Run Cargo Check")
-                                    .on_click(cx.listener({
-                                        let on_starter_prompt = on_starter_prompt.clone();
-                                        move |this, _, window, cx| {
-                                            on_starter_prompt(this, "run cargo check".to_string(), window, cx);
-                                        }
-                                    }))
-                            )
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_3()
-                            .child(
-                                Button::new("starter-arch")
-                                    .secondary()
-                                    .flex_1()
-                                    .icon(IconName::Blocks)
-                                    .label("Explain Project Architecture")
-                                    .on_click(cx.listener({
-                                        let on_starter_prompt = on_starter_prompt.clone();
-                                        move |this, _, window, cx| {
-                                            on_starter_prompt(this, "summarize project architecture and core modules".to_string(), window, cx);
-                                        }
-                                    }))
-                            )
-                            .child(
-                                Button::new("starter-test")
-                                    .secondary()
-                                    .flex_1()
-                                    .icon(IconName::Check)
-                                    .label("Run Test Suite")
-                                    .on_click(cx.listener({
-                                        let on_starter_prompt = on_starter_prompt.clone();
-                                        move |this, _, window, cx| {
-                                            on_starter_prompt(this, "run cargo test".to_string(), window, cx);
-                                        }
-                                    }))
-                            )
-                    )
-            )
-    }
-
-    fn render_turn<V: 'static>(
-        turn: &Turn,
-        cx: &mut Context<V>,
-        on_approve_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_reject_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_revert_turn: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-    ) -> impl IntoElement {
-        let is_running = turn.status == TurnStatus::Running || turn.status == TurnStatus::WaitingForApproval;
-        let cid = turn.id.clone();
-
-        let mut step_elements = Vec::new();
-        for step in &turn.steps {
-            step_elements.push(
-                Self::render_tool_step(step, cx, on_approve_tool.clone(), on_reject_tool.clone())
-                    .into_any_element(),
-            );
-        }
-
-        v_flex()
-            .w_full()
-            .gap_3()
-            // 1. User Prompt Bubble (right-aligned card)
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_end()
-                    .child(
-                        v_flex()
-                            .max_w(gpui::px(640.0))
-                            .p_3p5()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().accent.opacity(0.15))
-                            .border_1()
-                            .border_color(cx.theme().primary.opacity(0.35))
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(Icon::new(IconName::User).small().text_color(cx.theme().primary))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(cx.theme().primary)
-                                            .child(format!("You · Turn #{}", turn.turn_number))
-                                    )
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .child(turn.user_prompt.clone())
-                            )
-                    )
-            )
-            // 2. Tool Execution Steps (cards, approvals, terminal outputs)
-            .when(!turn.steps.is_empty(), |this| {
-                this.child(
+            // Draft Hero Empty State matching T3 Code DraftHeroHeadline.tsx
+            return v_flex()
+                .flex_1()
+                .w_full()
+                .items_center()
+                .justify_center()
+                .p_8()
+                .gap_6()
+                .child(
                     v_flex()
-                        .w_full()
-                        .gap_2p5()
-                        .children(step_elements)
-                )
-            })
-            // 3. Assistant Response Bubble
-            .when(!turn.assistant_response.is_empty() || is_running, |this| {
-                this.child(
-                    v_flex()
-                        .w_full()
-                        .p_4()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().secondary.opacity(0.25))
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .gap_2()
+                        .items_center()
+                        .gap_3()
                         .child(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(Icon::new(IconName::Bot).small().text_color(cx.theme().primary))
+                                .child(Icon::new(IconName::Sparkles).text_color(cx.theme().primary))
                                 .child(
                                     div()
-                                        .text_xs()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_2xl()
+                                        .font_weight(gpui::FontWeight::BOLD)
                                         .text_color(cx.theme().foreground)
-                                        .child("Assistant")
+                                        .child("Where should we start?")
                                 )
                         )
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child(turn.assistant_response.clone())
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Select a starter task or type your instructions into the composer below.")
                         )
-                        .when(is_running, |this| {
-                            this.child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1p5()
-                                    .child(Icon::new(IconName::RotateCw).small().text_color(cx.theme().primary))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("Executing operations...")
-                                    )
-                            )
-                        })
-                )
-            })
-            // 4. Git Checkpoint & Revert Banner matching T3 Code CheckpointCard
-            .when(turn.checkpoint.is_some(), |this| {
-                let cp = turn.checkpoint.as_ref().unwrap();
-                let sha = cp.git_sha.as_deref().unwrap_or("unknown");
-                let files_count = cp.files_changed.len();
-
-                this.child(
-                    h_flex()
-                        .w_full()
-                        .p_2p5()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().secondary.opacity(0.35))
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .items_center()
-                        .justify_between()
+                        // Context Chips
                         .child(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(Icon::new(IconName::GitCommitHorizontal).small().text_color(cx.theme().primary))
+                                .pt_1()
                                 .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("Checkpoint: {} ({} files affected)", sha, files_count))
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_full()
+                                        .bg(cx.theme().secondary.opacity(0.4))
+                                        .child(Icon::new(IconName::Folder).small().text_color(cx.theme().muted_foreground))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(props.project_name.to_string())
+                                        )
+                                )
+                                .when_some(props.git_branch, |this, branch| {
+                                    this.child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(cx.theme().secondary.opacity(0.4))
+                                            .child(Icon::new(IconName::GitBranch).small().text_color(cx.theme().muted_foreground))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(branch.to_string())
+                                            )
+                                    )
+                                })
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_full()
+                                        .bg(cx.theme().secondary.opacity(0.4))
+                                        .child(Icon::new(IconName::GitCompare).small().text_color(cx.theme().muted_foreground))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(if props.changed_files_count == 0 {
+                                                    "Working tree clean".to_string()
+                                                } else {
+                                                    format!("{} modified files", props.changed_files_count)
+                                                })
+                                        )
                                 )
                         )
-                        .child(
-                            Button::new(format!("revert-{}", cid))
-                                .ghost()
-                                .small()
-                                .icon(IconName::RotateCcw)
-                                .label("Revert to Checkpoint")
-                                .on_click(cx.listener({
-                                    let on_revert_turn = on_revert_turn.clone();
-                                    move |this, _, window, cx| on_revert_turn(this, cid.clone(), window, cx)
-                                }))
-                        )
                 )
-            })
-    }
-
-    fn render_tool_step<V: 'static>(
-        step: &ToolStep,
-        cx: &mut Context<V>,
-        on_approve_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_reject_tool: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
-    ) -> impl IntoElement {
-        let sid_app = step.id.clone();
-        let sid_rej = step.id.clone();
-
-        v_flex()
-            .w_full()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .child(
-                // Step header
-                h_flex()
-                    .w_full()
-                    .px_3()
-                    .py_2()
-                    .bg(cx.theme().secondary.opacity(0.3))
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Icon::new(IconName::Terminal).small().text_color(cx.theme().foreground))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(cx.theme().foreground)
-                                    .child(format!("Tool: {}", step.tool_name))
-                            )
-                    )
-                    .child(
-                        match step.status {
-                            StepStatus::PendingApproval => Badge::new().child("Needs Approval"),
-                            StepStatus::Running => Badge::new().child("Running..."),
-                            StepStatus::Completed => Badge::new().child("Completed"),
-                            StepStatus::Failed => Badge::new().child("Failed"),
-                            StepStatus::Rejected => Badge::new().child("Rejected"),
-                        }
-                    )
-            )
-            // Command details / explanation
-            .when(step.explanation.is_some(), |this| {
-                this.child(
-                    div()
-                        .px_3()
-                        .py_2()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(step.explanation.clone().unwrap())
-                )
-            })
-            // Approval Banner (if waiting)
-            .when(step.status == StepStatus::PendingApproval, |this| {
-                this.child(
+                // 2x2 Starter Action Cards Grid
+                .child(
                     v_flex()
-                        .p_3()
-                        .bg(cx.theme().accent.opacity(0.15))
-                        .border_t_1()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .gap_2()
+                        .w_full()
+                        .max_w(gpui::px(720.0))
+                        .gap_3()
                         .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(cx.theme().foreground)
-                                .child("This tool proposal requires authorization before running on your machine.")
+                            h_flex()
+                                .gap_3()
+                                .child(Self::starter_card(
+                                    "starter-git",
+                                    IconName::GitBranch,
+                                    "Show Working Tree & Git Status",
+                                    "Inspect branch, commits, and uncommitted file modifications",
+                                    "git status",
+                                    cx,
+                                    on_starter_prompt.clone(),
+                                ))
+                                .child(Self::starter_card(
+                                    "starter-check",
+                                    IconName::Terminal,
+                                    "Run Cargo Check",
+                                    "Verify Rust compiler types, lints, and diagnostic errors",
+                                    "run cargo check",
+                                    cx,
+                                    on_starter_prompt.clone(),
+                                ))
                         )
                         .child(
                             h_flex()
-                                .gap_2()
-                                .child(
-                                    Button::new(format!("app-{}", sid_app))
-                                        .primary()
-                                        .small()
-                                        .icon(IconName::Check)
-                                        .label("Approve & Run")
-                                        .on_click(cx.listener({
-                                            let on_approve_tool = on_approve_tool.clone();
-                                            move |this, _, window, cx| on_approve_tool(this, sid_app.clone(), window, cx)
-                                        }))
-                                )
-                                .child(
-                                    Button::new(format!("rej-{}", sid_rej))
-                                        .outline()
-                                        .small()
-                                        .icon(IconName::X)
-                                        .label("Reject")
-                                        .on_click(cx.listener({
-                                            let on_reject_tool = on_reject_tool.clone();
-                                            move |this, _, window, cx| on_reject_tool(this, sid_rej.clone(), window, cx)
-                                        }))
-                                )
+                                .gap_3()
+                                .child(Self::starter_card(
+                                    "starter-arch",
+                                    IconName::FolderTree,
+                                    "Explain Project Architecture",
+                                    "Summarize UI views, models, runner loop, and storage layout",
+                                    "Explain the architecture of this project",
+                                    cx,
+                                    on_starter_prompt.clone(),
+                                ))
+                                .child(Self::starter_card(
+                                    "starter-test",
+                                    IconName::CheckCheck,
+                                    "Run Project Tests",
+                                    "Execute test suite to check functionality and regressions",
+                                    "run cargo test",
+                                    cx,
+                                    on_starter_prompt.clone(),
+                                ))
                         )
                 )
-            })
-            // Output console box
-            .when(step.output.is_some(), |this| {
-                this.child(
-                    div()
-                        .p_3()
-                        .bg(cx.theme().secondary.opacity(0.4))
-                        .max_h_64()
-                        .overflow_hidden()
-                        .text_xs()
-                        .text_color(cx.theme().foreground)
-                        .child(step.output.clone().unwrap())
-                )
-            })
+                .into_any_element();
+        }
+
+        // Conversation Stream
+        v_flex()
+            .flex_1()
+            .w_full()
+            .overflow_hidden()
+            .p_4()
+            .gap_6()
+            .children(props.turns.iter().map(|turn| {
+                let turn_id = turn.id.clone();
+                let user_prompt = turn.user_prompt.clone();
+                let assistant_text = turn.assistant_response.clone();
+                let is_turn_running = turn.status == TurnStatus::Running;
+                let on_approve = on_approve_step.clone();
+                let on_reject = on_reject_step.clone();
+                let on_revert = on_revert_checkpoint.clone();
+                let on_copy = on_copy_text.clone();
+
+                v_flex()
+                    .w_full()
+                    .gap_4()
+                    .child(
+                        // User message card
+                        h_flex()
+                            .w_full()
+                            .justify_end()
+                            .child(
+                                v_flex()
+                                    .max_w(gpui::px(680.0))
+                                    .p_3p5()
+                                    .rounded(cx.theme().radius)
+                                    .bg(cx.theme().secondary.opacity(0.45))
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .gap_2()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .child(Icon::new(IconName::User).small().text_color(cx.theme().primary))
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                            .text_color(cx.theme().foreground)
+                                                            .child("You")
+                                                    )
+                                                    .child(
+                                                        Badge::new()
+                                                            .small()
+                                                            .child(format!("Turn #{}", turn.turn_number))
+                                                    )
+                                            )
+                                            .child(
+                                                Button::new(format!("copy-user-btn-{}", turn.id))
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(IconName::Copy)
+                                                    .on_click(cx.listener({
+                                                        let prompt_text = user_prompt.clone();
+                                                        let on_copy = on_copy.clone();
+                                                        move |this, _, window, cx| on_copy(this, prompt_text.clone(), window, cx)
+                                                    }))
+                                            )
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().foreground)
+                                            .child(user_prompt.clone())
+                                    )
+                            )
+                    )
+                    // Assistant response card
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .p_4()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().background)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .gap_3()
+                            .child(
+                                // Assistant Header
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(Icon::new(IconName::Bot).small().text_color(cx.theme().primary))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .text_color(cx.theme().foreground)
+                                                    .child("Assistant")
+                                            )
+                                            .when(is_turn_running, |this| {
+                                                this.child(
+                                                    Badge::new()
+                                                        .small()
+                                                        .child("Generating...")
+                                                )
+                                            })
+                                    )
+                                    .child(
+                                        Button::new(format!("copy-asst-btn-{}", turn.id))
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::Copy)
+                                            .on_click(cx.listener({
+                                                let asst_text = assistant_text.clone();
+                                                let on_copy = on_copy.clone();
+                                                move |this, _, window, cx| on_copy(this, asst_text.clone(), window, cx)
+                                            }))
+                                    )
+                            )
+                            // Assistant Text Output
+                            .when(!turn.assistant_response.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .line_height(gpui::relative(1.4))
+                                        .text_color(cx.theme().foreground)
+                                        .child(turn.assistant_response.clone())
+                                )
+                            })
+                            // Tool Execution Steps
+                            .children(turn.steps.iter().map(|step| {
+                                let step_id = step.id.clone();
+                                let is_pending = step.status == StepStatus::PendingApproval;
+                                let _is_running = step.status == StepStatus::Running;
+                                let on_approve = on_approve.clone();
+                                let on_reject = on_reject.clone();
+                                let on_copy = on_copy.clone();
+                                let command_text = step.arguments.clone();
+
+                                v_flex()
+                                    .p_3()
+                                    .rounded(cx.theme().radius)
+                                    .border_1()
+                                    .border_color(if is_pending {
+                                        gpui::rgb(0xf59e0b).into()
+                                    } else {
+                                        cx.theme().border
+                                    })
+                                    .bg(if is_pending {
+                                        gpui::rgba(0xf59e0b10).into()
+                                    } else {
+                                        cx.theme().secondary.opacity(0.3)
+                                    })
+                                    .gap_2p5()
+                                    // Step Header
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(Icon::new(IconName::Terminal).small().text_color(cx.theme().primary))
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                            .text_color(cx.theme().foreground)
+                                                            .child(step.tool_name.clone())
+                                                    )
+                                            )
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1p5()
+                                                    .when_some(step.duration_ms, |this, ms| {
+                                                        this.child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(cx.theme().muted_foreground)
+                                                                .child(format!("{ms}ms"))
+                                                        )
+                                                    })
+                                                    .child(
+                                                        match step.status {
+                                                            StepStatus::PendingApproval => Badge::new().small().child("Needs Approval"),
+                                                            StepStatus::Running => Badge::new().small().child("Running..."),
+                                                            StepStatus::Completed => Badge::new().small().child("Completed"),
+                                                            StepStatus::Failed => Badge::new().small().child("Failed"),
+                                                            StepStatus::Rejected => Badge::new().small().child("Rejected"),
+                                                        }
+                                                    )
+                                            )
+                                    )
+                                    // Explanation text if any
+                                    .when_some(step.explanation.as_ref(), |this, expl| {
+                                        this.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(expl.clone())
+                                        )
+                                    })
+                                    // Monospace Command Box
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .p_2()
+                                            .rounded(cx.theme().radius)
+                                            .bg(gpui::black().opacity(0.3))
+                                            .border_1()
+                                            .border_color(cx.theme().border.opacity(0.4))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().primary)
+                                                    .child(format!("$ {}", step.arguments))
+                                            )
+                                            .child(
+                                                Button::new(format!("copy-cmd-{}", step.id))
+                                                    .ghost()
+                                                    .small()
+                                                    .icon(IconName::Copy)
+                                                    .on_click(cx.listener({
+                                                        let cmd = command_text.clone();
+                                                        let on_copy = on_copy.clone();
+                                                        move |this, _, window, cx| on_copy(this, cmd.clone(), window, cx)
+                                                    }))
+                                            )
+                                    )
+                                    // Pending Approval Action Banner
+                                    .when(is_pending, |this| {
+                                        let step_id_approve = step_id.clone();
+                                        let step_id_reject = step_id.clone();
+
+                                        this.child(
+                                            v_flex()
+                                                .p_2p5()
+                                                .rounded(cx.theme().radius)
+                                                .bg(gpui::rgba(0xf59e0b15))
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .text_color(gpui::rgb(0xfbbf24))
+                                                        .child("This tool proposal requires authorization before executing on your machine.")
+                                                )
+                                                .child(
+                                                    h_flex()
+                                                        .gap_2()
+                                                        .child(
+                                                            Button::new(format!("approve-{}", step_id))
+                                                                .primary()
+                                                                .small()
+                                                                .icon(IconName::Check)
+                                                                .label("Approve & Run")
+                                                                .on_click(cx.listener({
+                                                                    let on_approve = on_approve.clone();
+                                                                    move |this, _, window, cx| on_approve(this, step_id_approve.clone(), window, cx)
+                                                                }))
+                                                        )
+                                                        .child(
+                                                            Button::new(format!("reject-{}", step_id))
+                                                                .danger()
+                                                                .small()
+                                                                .icon(IconName::X)
+                                                                .label("Reject")
+                                                                .on_click(cx.listener({
+                                                                    let on_reject = on_reject.clone();
+                                                                    move |this, _, window, cx| on_reject(this, step_id_reject.clone(), window, cx)
+                                                                }))
+                                                        )
+                                                )
+                                        )
+                                    })
+                                    // Terminal output box
+                                    .when_some(step.output.as_ref(), |this, out| {
+                                        let output_text = out.clone();
+                                        this.child(
+                                            v_flex()
+                                                .p_2()
+                                                .rounded(cx.theme().radius)
+                                                .bg(gpui::black().opacity(0.35))
+                                                .border_1()
+                                                .border_color(cx.theme().border.opacity(0.4))
+                                                .max_h(gpui::px(200.0))
+                                                .overflow_hidden()
+                                                .gap_1()
+                                                .child(
+                                                    h_flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                                .text_color(cx.theme().muted_foreground)
+                                                                .child("TERMINAL OUTPUT")
+                                                        )
+                                                        .child(
+                                                            Button::new(format!("copy-out-{}", step.id))
+                                                                .ghost()
+                                                                .small()
+                                                                .icon(IconName::Copy)
+                                                                .on_click(cx.listener({
+                                                                    let out_text = output_text.clone();
+                                                                    let on_copy = on_copy.clone();
+                                                                    move |this, _, window, cx| on_copy(this, out_text.clone(), window, cx)
+                                                                }))
+                                                        )
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().foreground)
+                                                        .child(out.clone())
+                                                )
+                                        )
+                                    })
+                            }))
+                            // Checkpoint & Revert Banner
+                            .when_some(turn.checkpoint.as_ref(), |this, cp| {
+                                let sha_short = cp.git_sha.as_deref().unwrap_or("snapshot").chars().take(7).collect::<String>();
+                                let turn_id_revert = turn_id.clone();
+
+                                this.child(
+                                    h_flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_2p5()
+                                        .rounded(cx.theme().radius)
+                                        .bg(cx.theme().secondary.opacity(0.3))
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(Icon::new(IconName::GitCompare).small().text_color(cx.theme().primary))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .text_color(cx.theme().foreground)
+                                                        .child(format!("Checkpoint [{sha_short}]: {} files modified", cp.files_changed.len()))
+                                                )
+                                        )
+                                        .child(
+                                            Button::new(format!("revert-{}", turn.id))
+                                                .secondary()
+                                                .small()
+                                                .icon(IconName::RotateCcw)
+                                                .label("Revert Checkpoint")
+                                                .on_click(cx.listener({
+                                                    let on_revert = on_revert.clone();
+                                                    move |this, _, window, cx| on_revert(this, turn_id_revert.clone(), window, cx)
+                                                }))
+                                        )
+                                )
+                            })
+                    )
+            }))
+            .into_any_element()
+    }
+
+    fn starter_card<V: 'static>(
+        _id: &'static str,
+        icon: IconName,
+        title: &'static str,
+        description: &'static str,
+        prompt: &'static str,
+        cx: &mut Context<V>,
+        on_starter_prompt: impl Fn(&mut V, String, &mut Window, &mut Context<V>) + 'static + Clone,
+    ) -> impl IntoElement {
+        v_flex()
+            .flex_1()
+            .p_4()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().secondary.opacity(0.25))
+            .cursor_pointer()
+            .gap_1p5()
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    on_starter_prompt(this, prompt.to_string(), window, cx);
+                }),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(icon).small().text_color(cx.theme().primary))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().foreground)
+                            .child(title)
+                    )
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(description)
+            )
     }
 }

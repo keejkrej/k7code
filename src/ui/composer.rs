@@ -2,17 +2,21 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     button::{Button, ButtonVariants},
     input::{Input, InputState},
-    ActiveTheme, Sizable,
+    Icon, Sizable, ActiveTheme,
 };
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::model::ProviderKind;
+use crate::model::{ProviderKind, RuntimeMode};
 use crate::ui::{h_flex, v_flex};
 
 pub struct ComposerRenderProps<'a> {
     pub input_state: &'a Entity<InputState>,
     pub provider: ProviderKind,
     pub model: &'a str,
+    pub runtime_mode: RuntimeMode,
+    pub project_name: &'a str,
+    pub git_branch: Option<&'a str>,
     pub is_running: bool,
 }
 
@@ -24,7 +28,8 @@ impl ComposerView {
         cx: &mut Context<V>,
         on_submit: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
         on_stop: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
-        on_cycle_model: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_open_model_picker: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
+        on_clear_prompt: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static + Clone,
     ) -> impl IntoElement {
         // Floating glass composer surface matching T3 Code ComposerSurface.tsx
         v_flex()
@@ -43,6 +48,61 @@ impl ComposerView {
                     .bg(cx.theme().secondary.opacity(0.35))
                     .p_3()
                     .gap_2p5()
+                    // Context Strip Tags
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_full()
+                                    .bg(cx.theme().secondary.opacity(0.5))
+                                    .child(Icon::new(IconName::Folder).small().text_color(cx.theme().muted_foreground))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(props.project_name.to_string())
+                                    )
+                            )
+                            .when_some(props.git_branch, |this, branch| {
+                                this.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded_full()
+                                        .bg(cx.theme().secondary.opacity(0.5))
+                                        .child(Icon::new(IconName::GitBranch).small().text_color(cx.theme().muted_foreground))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(branch.to_string())
+                                        )
+                                )
+                            })
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_full()
+                                    .bg(cx.theme().secondary.opacity(0.5))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(props.runtime_mode.label())
+                                    )
+                            )
+                    )
                     // Input prompt area
                     .child(
                         Input::new(props.input_state)
@@ -55,7 +115,7 @@ impl ComposerView {
                             .items_center()
                             .justify_between()
                             .child(
-                                // Model & Provider Selector Pill
+                                // Model & Provider Selector Pill (opens model picker dialog)
                                 h_flex()
                                     .items_center()
                                     .gap_2()
@@ -66,8 +126,8 @@ impl ComposerView {
                                             .icon(IconName::Sparkles)
                                             .label(format!("{} · {}", props.provider.display_name(), props.model))
                                             .on_click(cx.listener({
-                                                let on_cycle_model = on_cycle_model.clone();
-                                                move |this, _, window, cx| on_cycle_model(this, window, cx)
+                                                let on_open_model_picker = on_open_model_picker.clone();
+                                                move |this, _, window, cx| on_open_model_picker(this, window, cx)
                                             }))
                                     )
                             )
@@ -75,6 +135,17 @@ impl ComposerView {
                                 h_flex()
                                     .items_center()
                                     .gap_2()
+                                    .child(
+                                        Button::new("composer-clear-btn")
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::X)
+                                            .label("Clear")
+                                            .on_click(cx.listener({
+                                                let on_clear_prompt = on_clear_prompt.clone();
+                                                move |this, _, window, cx| on_clear_prompt(this, window, cx)
+                                            }))
+                                    )
                                     .child(
                                         if props.is_running {
                                             // Stop execution button
@@ -108,7 +179,7 @@ impl ComposerView {
                     .pt_1()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground.opacity(0.8))
-                    .child("Enter to send · Shift+Enter for new line · Click model pill to switch CLI provider")
+                    .child("Enter to send · Shift+Enter for new line · Esc to clear · Ctrl+B sidebar · Ctrl+D diff")
             )
     }
 }
