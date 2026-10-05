@@ -28,7 +28,7 @@ use crate::ui::chat::{ChatRenderProps, ChatView};
 use crate::ui::composer::{ComposerRenderProps, ComposerView};
 use crate::ui::diff_panel::{DiffPanelRenderProps, DiffPanelView};
 use crate::ui::header::{HeaderRenderProps, HeaderView};
-use crate::ui::settings_modal::{SettingsRenderProps, SettingsModalView};
+use crate::ui::settings_modal::{SettingsModalView, SettingsRenderProps};
 use crate::ui::sidebar::{SidebarRenderProps, SidebarView, ThreadFilterTab};
 use crate::ui::v_flex;
 
@@ -58,7 +58,7 @@ impl K7AppView {
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Ask a question, propose edits, or run a command (e.g. 'run cargo check')...")
+                .placeholder("Type your prompt or instructions (e.g. 'run cargo check')...")
         });
 
         let mut app = Self {
@@ -174,9 +174,10 @@ impl K7AppView {
     pub fn cycle_runtime_mode(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(t) = self.active_thread_mut() {
             t.runtime_mode = match t.runtime_mode {
-                RuntimeMode::ReadOnly => RuntimeMode::WorkspaceWrite,
-                RuntimeMode::WorkspaceWrite => RuntimeMode::DangerFullAccess,
-                RuntimeMode::DangerFullAccess => RuntimeMode::ReadOnly,
+                RuntimeMode::Supervised => RuntimeMode::AutoAcceptEdits,
+                RuntimeMode::AutoAcceptEdits => RuntimeMode::Auto,
+                RuntimeMode::Auto => RuntimeMode::FullAccess,
+                RuntimeMode::FullAccess => RuntimeMode::Supervised,
             };
             self.save_state();
             cx.notify();
@@ -446,6 +447,10 @@ impl Render for K7AppView {
             None => (None, false, [].as_slice(), ProviderKind::Claude, "claude-3-7-sonnet"),
         };
 
+        let active_provider_name = active_thread
+            .map(|t| t.provider.display_name())
+            .unwrap_or("Claude Code");
+
         let changed_files_count = if !self.diff_content.is_empty() { 1 } else { 0 };
 
         div()
@@ -463,6 +468,7 @@ impl Render for K7AppView {
                         active_thread_id: self.data.active_thread_id.as_deref(),
                         selected_tab: self.filter_tab,
                         detected_providers_count: self.provider_statuses.values().filter(|s| s.is_available).count(),
+                        active_provider_name,
                     },
                     cx,
                     |this, tid, window, cx| this.select_thread(tid, window, cx),
@@ -478,7 +484,7 @@ impl Render for K7AppView {
                 )
             )
             .child(
-                // 2. Center Main View: Header + Conversation / Empty + Composer
+                // 2. Center Main View: Header + Conversation / Empty + Floating Composer
                 v_flex()
                     .flex_1()
                     .h_full()
@@ -486,6 +492,7 @@ impl Render for K7AppView {
                     .child(
                         HeaderView::render(
                             HeaderRenderProps {
+                                active_project: self.active_project(),
                                 active_thread,
                                 git_branch: self.git_branch.as_deref(),
                                 changed_files_count,
@@ -576,7 +583,7 @@ fn main() {
             open_window(
                 WindowOptions {
                     titlebar: Some(TitlebarOptions {
-                        title: Some("k7code - Rust GPUI Agent Workspace".into()),
+                        title: Some("T3 Code (k7code - Pure Rust Native)".into()),
                         appears_transparent: false,
                         traffic_light_position: None,
                     }),
@@ -584,7 +591,7 @@ fn main() {
                         origin: gpui::Point::new(gpui::px(100.0), gpui::px(100.0)),
                         size: gpui::Size {
                             width: gpui::px(1280.0),
-                            height: gpui::px(820.0),
+                            height: gpui::px(840.0),
                         },
                     })),
                     ..Default::default()

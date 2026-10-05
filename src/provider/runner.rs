@@ -1,10 +1,11 @@
-use anyhow::Result;
-use async_channel::{Receiver, Sender};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+use anyhow::Result;
+use async_channel::{Receiver, Sender};
 use uuid::Uuid;
 
 use crate::git::GitManager;
@@ -213,7 +214,7 @@ impl ProviderRunner {
             ApprovalPolicy::Never => false,
             ApprovalPolicy::Untrusted => true,
             ApprovalPolicy::OnRequest | ApprovalPolicy::OnFailure => {
-                ctx.runtime_mode != RuntimeMode::DangerFullAccess
+                ctx.runtime_mode != RuntimeMode::FullAccess
             }
         };
 
@@ -231,26 +232,32 @@ impl ProviderRunner {
                     return Ok(());
                 }
 
-                match cmd_receiver.recv_blocking() {
-                    Ok(RunnerCommand::ApproveTool { step_id: sid }) if sid == step_id => {
-                        break;
+                if let Ok(cmd) = cmd_receiver.recv_blocking() {
+                    match cmd {
+                        RunnerCommand::ApproveTool { step_id: approved_id } => {
+                            if approved_id == step_id {
+                                break;
+                            }
+                        }
+                        RunnerCommand::RejectTool { step_id: rejected_id } => {
+                            if rejected_id == step_id {
+                                let _ = event_sender.send_blocking(ProviderEvent::ToolFinished {
+                                    step_id,
+                                    output: "Operation rejected by user.".to_string(),
+                                    success: false,
+                                    duration_ms: 0,
+                                });
+                                return Ok(());
+                            }
+                        }
+                        RunnerCommand::Cancel => return Ok(()),
                     }
-                    Ok(RunnerCommand::RejectTool { step_id: sid }) if sid == step_id => {
-                        let _ = event_sender.send_blocking(ProviderEvent::ToolFinished {
-                            step_id,
-                            output: "Action was rejected by user.".to_string(),
-                            success: false,
-                            duration_ms: 0,
-                        });
-                        return Ok(());
-                    }
-                    Ok(RunnerCommand::Cancel) => {
-                        is_cancelled.store(true, Ordering::SeqCst);
-                        return Ok(());
-                    }
-                    _ => {}
                 }
             }
+        }
+
+        if is_cancelled.load(Ordering::SeqCst) {
+            return Ok(());
         }
 
         let _ = event_sender.send_blocking(ProviderEvent::ToolStarted {
@@ -259,17 +266,17 @@ impl ProviderRunner {
 
         let start_time = Instant::now();
 
-        let (output, success) = if tool_name == "run_command" {
-            Self::execute_command(&ctx.project_path, args)
+        let (output_str, success) = if tool_name == "run_command" {
+            Self::execute_system_command(args, &ctx.project_path)
         } else {
-            (format!("Tool '{}' executed successfully.", tool_name), true)
+            (format!("Unknown tool: {}", tool_name), false)
         };
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         let _ = event_sender.send_blocking(ProviderEvent::ToolFinished {
             step_id,
-            output,
+            output: output_str,
             success,
             duration_ms,
         });
@@ -277,31 +284,38 @@ impl ProviderRunner {
         Ok(())
     }
 
-    fn execute_command(project_path: &PathBuf, cmd_str: &str) -> (String, bool) {
+    fn execute_system_command(command: &str, project_dir: &std::path::Path) -> (String, bool) {
         #[cfg(target_os = "windows")]
-        let mut cmd = Command::new("powershell");
-        #[cfg(target_os = "windows")]
-        cmd.args(["-NoProfile", "-Command", cmd_str]);
+        let mut cmd = {
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-Command", command]);
+            c
+        };
 
         #[cfg(not(target_os = "windows"))]
-        let mut cmd = Command::new("sh");
-        #[cfg(not(target_os = "windows"))]
-        cmd.args(["-c", cmd_str]);
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.args(["-c", command]);
+            c
+        };
 
-        cmd.current_dir(project_path);
+        cmd.current_dir(project_dir);
 
         match cmd.output() {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = if stderr.is_empty() {
-                    stdout
-                } else if stdout.is_empty() {
-                    stderr
-                } else {
-                    format!("{}\n{}", stdout, stderr)
-                };
-                (combined, out.status.success())
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let mut combined = String::new();
+                if !stdout.is_empty() {
+                    combined.push_str(&stdout);
+                }
+                if !stderr.is_empty() {
+                    if !combined.is_empty() {
+                        combined.push_str("\n--- STDERR ---\n");
+                    }
+                    combined.push_str(&stderr);
+                }
+                (combined, output.status.success())
             }
             Err(e) => (format!("Failed to execute command: {}", e), false),
         }
