@@ -85,6 +85,17 @@ impl GitManager {
         (files, diff_content)
     }
 
+    pub fn get_file_diff(project_path: &Path, file_path: &str) -> String {
+        let mut cmd = Command::new("git");
+        cmd.arg("diff").arg("--").arg(file_path);
+        cmd.current_dir(project_path);
+
+        match cmd.output() {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+            Err(_) => String::new(),
+        }
+    }
+
     pub fn revert_to_sha(project_path: &Path, sha: &str) -> Result<()> {
         let _ = Command::new("git")
             .arg("reset")
